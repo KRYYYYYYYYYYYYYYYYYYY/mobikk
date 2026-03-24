@@ -18,18 +18,14 @@
             }
         }
 
-        const hashConfig = window.location.hash.startsWith("#")
-            ? window.location.hash.slice(1)
-            : "";
-
-        const myConfig = decodeConfig(hashConfig) || decodeConfig(embeddedConfigHash);
-
+        // Используем только встроенный конфиг, чтобы URL hash никогда не переопределял ссылку.
+        const myConfig = embeddedConfig;
         // Маскируемся под Marzban Dashboard
         window.__INITIAL_STATE__ = {
             response: {
                 isFound: Boolean(myConfig),
                 user: {
-                    username: "mobikk_user",
+                    username: "mobik_user",
                     isActive: Boolean(myConfig),
                     status: myConfig ? "ACTIVE" : "NOT_FOUND"
                 },

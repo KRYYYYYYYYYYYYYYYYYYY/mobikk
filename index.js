@@ -32,6 +32,25 @@ function success(body, contentType = DEFAULT_CONTENT_TYPE, extraHeaders = {}) {
   };
 }
 
+
+function toBase64(input) {
+  return Buffer.from(input, "utf-8").toString("base64");
+}
+
+function applyOutputMode(payload) {
+  const outputMode = process.env.OUTPUT_MODE?.trim() || "raw";
+
+  if (outputMode === "base64") {
+    return toBase64(payload);
+  }
+
+  if (outputMode === "fake_crypt5") {
+    return `happ://crypt5/${toBase64(payload)}`;
+  }
+
+  return payload;
+}
+
 async function fetchWithTimeout(url, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -78,7 +97,7 @@ export async function handler() {
   const upstreamUrl = process.env.SUBSCRIPTION_URL?.trim();
 
   if (inlineSubscription) {
-    return success(inlineSubscription);
+    return success(applyOutputMode(inlineSubscription));
   }
 
   if (!upstreamUrl) {
@@ -95,7 +114,7 @@ export async function handler() {
   const isFresh = cache.body && now - cache.updatedAt < cacheTtlMs;
 
   if (isFresh) {
-    return success(cache.body, cache.contentType, { "X-Subscription-Cache": "HIT" });
+    return success(applyOutputMode(cache.body), cache.contentType, { "X-Subscription-Cache": "HIT" });
   }
 
   try {
@@ -104,17 +123,17 @@ export async function handler() {
     cache.contentType = fetched.contentType;
     cache.updatedAt = now;
 
-    return success(fetched.body, fetched.contentType, { "X-Subscription-Cache": "MISS" });
+    return success(applyOutputMode(fetched.body), fetched.contentType, { "X-Subscription-Cache": "MISS" });
   } catch {
     if (cache.body) {
-      return success(cache.body, cache.contentType, {
+      return success(applyOutputMode(cache.body), cache.contentType, {
         "X-Subscription-Cache": "STALE",
         Warning: '110 - "Response is stale"'
       });
     }
 
     if (fallbackSubscription) {
-      return success(fallbackSubscription, DEFAULT_CONTENT_TYPE, {
+      return success(applyOutputMode(fallbackSubscription), DEFAULT_CONTENT_TYPE, {
         "X-Subscription-Cache": "FALLBACK_TEXT"
       });
     }

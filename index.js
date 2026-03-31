@@ -1,6 +1,7 @@
 const DEFAULT_CONTENT_TYPE = "text/plain; charset=utf-8";
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_ENCRYPT_ENDPOINT = "https://api.sayori.cc/v1/encrypt";
 
 const cache = {
   body: null,
@@ -32,12 +33,55 @@ function success(body, contentType = DEFAULT_CONTENT_TYPE, extraHeaders = {}) {
   };
 }
 
-
 function toBase64(input) {
   return Buffer.from(input, "utf-8").toString("base64");
 }
 
-function applyOutputMode(payload) {
+async function encryptWithSayori(payload) {
+  const apiKey = process.env.SAYORI_API_KEY?.trim();
+
+  if (!apiKey) {
+    throw new Error("Missing SAYORI_API_KEY");
+  }
+
+  const endpoint = process.env.ENCRYPT_ENDPOINT?.trim() || DEFAULT_ENCRYPT_ENDPOINT;
+  const version = process.env.ENCRYPT_VERSION?.trim() || "crypt5";
+  const timeoutMs = toNumber(process.env.ENCRYPT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey
+      },
+      body: JSON.stringify({
+        data: payload,
+        version
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Encryption API failed with ${response.status}`);
+    }
+
+    const json = await response.json();
+
+    if (!json?.success || typeof json.result !== "string" || !json.result.trim()) {
+      throw new Error("Encryption API returned invalid result");
+    }
+
+    return json.result.trim();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function applyOutputMode(payload) {
   const outputMode = process.env.OUTPUT_MODE?.trim() || "raw";
 
   if (outputMode === "base64") {
@@ -46,6 +90,10 @@ function applyOutputMode(payload) {
 
   if (outputMode === "fake_crypt5") {
     return `happ://crypt5/${toBase64(payload)}`;
+  }
+
+  if (outputMode === "encrypt_api") {
+    return encryptWithSayori(payload);
   }
 
   return payload;
@@ -91,57 +139,70 @@ async function fetchUpstream(upstreamUrl, timeoutMs) {
   throw lastError ?? new Error("Upstream request failed");
 }
 
+async function formatSuccess(payload, contentType, extraHeaders = {}) {
+  const transformed = await applyOutputMode(payload);
+  return success(transformed, contentType, extraHeaders);
+}
+
 export async function handler() {
   const inlineSubscription = process.env.SUBSCRIPTION_TEXT?.trim();
   const fallbackSubscription = process.env.FALLBACK_SUBSCRIPTION_TEXT?.trim();
   const upstreamUrl = process.env.SUBSCRIPTION_URL?.trim();
 
-  if (inlineSubscription) {
-    return success(applyOutputMode(inlineSubscription));
-  }
+  try {
+    if (inlineSubscription) {
+      return await formatSuccess(inlineSubscription, DEFAULT_CONTENT_TYPE);
+    }
 
-  if (!upstreamUrl) {
+    if (!upstreamUrl) {
+      return {
+        statusCode: 500,
+        headers: baseHeaders(),
+        body: "Missing SUBSCRIPTION_TEXT or SUBSCRIPTION_URL"
+      };
+    }
+
+    const timeoutMs = toNumber(process.env.FETCH_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+    const cacheTtlMs = toNumber(process.env.CACHE_TTL_MS, DEFAULT_CACHE_TTL_MS);
+    const now = Date.now();
+    const isFresh = cache.body && now - cache.updatedAt < cacheTtlMs;
+
+    if (isFresh) {
+      return await formatSuccess(cache.body, cache.contentType, { "X-Subscription-Cache": "HIT" });
+    }
+
+    try {
+      const fetched = await fetchUpstream(upstreamUrl, timeoutMs);
+      cache.body = fetched.body;
+      cache.contentType = fetched.contentType;
+      cache.updatedAt = now;
+
+      return await formatSuccess(fetched.body, fetched.contentType, { "X-Subscription-Cache": "MISS" });
+    } catch {
+      if (cache.body) {
+        return await formatSuccess(cache.body, cache.contentType, {
+          "X-Subscription-Cache": "STALE",
+          Warning: '110 - "Response is stale"'
+        });
+      }
+
+      if (fallbackSubscription) {
+        return await formatSuccess(fallbackSubscription, DEFAULT_CONTENT_TYPE, {
+          "X-Subscription-Cache": "FALLBACK_TEXT"
+        });
+      }
+
+      return {
+        statusCode: 502,
+        headers: baseHeaders(),
+        body: "Upstream request failed"
+      };
+    }
+  } catch (error) {
     return {
       statusCode: 500,
       headers: baseHeaders(),
-      body: "Missing SUBSCRIPTION_TEXT or SUBSCRIPTION_URL"
-    };
-  }
-
-  const timeoutMs = toNumber(process.env.FETCH_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
-  const cacheTtlMs = toNumber(process.env.CACHE_TTL_MS, DEFAULT_CACHE_TTL_MS);
-  const now = Date.now();
-  const isFresh = cache.body && now - cache.updatedAt < cacheTtlMs;
-
-  if (isFresh) {
-    return success(applyOutputMode(cache.body), cache.contentType, { "X-Subscription-Cache": "HIT" });
-  }
-
-  try {
-    const fetched = await fetchUpstream(upstreamUrl, timeoutMs);
-    cache.body = fetched.body;
-    cache.contentType = fetched.contentType;
-    cache.updatedAt = now;
-
-    return success(applyOutputMode(fetched.body), fetched.contentType, { "X-Subscription-Cache": "MISS" });
-  } catch {
-    if (cache.body) {
-      return success(applyOutputMode(cache.body), cache.contentType, {
-        "X-Subscription-Cache": "STALE",
-        Warning: '110 - "Response is stale"'
-      });
-    }
-
-    if (fallbackSubscription) {
-      return success(applyOutputMode(fallbackSubscription), DEFAULT_CONTENT_TYPE, {
-        "X-Subscription-Cache": "FALLBACK_TEXT"
-      });
-    }
-
-    return {
-      statusCode: 502,
-      headers: baseHeaders(),
-      body: "Upstream request failed"
+      body: `Output transform failed: ${error.message}`
     };
   }
 }

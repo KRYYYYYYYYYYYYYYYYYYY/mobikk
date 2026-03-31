@@ -2,60 +2,56 @@
 
 Yandex Cloud Function (Node.js 22) that returns subscription data in a format clients can import.
 
-## Your new tactic (works with GitHub raw URL)
+## What changed for real `crypt5`
 
-If `https://raw.githubusercontent.com/.../wifi.txt` imports perfectly, use it as upstream:
+You can now use Happ encryption API directly from this function.
+
+If your raw source works (for example GitHub raw `.txt`), configure:
 
 - `SUBSCRIPTION_URL=https://raw.githubusercontent.com/.../wifi.txt`
-- keep `SUBSCRIPTION_TEXT` empty
+- `OUTPUT_MODE=encrypt_api`
+- `SAYORI_API_KEY=<your api key>`
+- optional: `ENCRYPT_VERSION=crypt5`
 
-Then choose output mode with `OUTPUT_MODE`.
+Function flow:
+
+1. downloads plain subscription from `SUBSCRIPTION_URL`
+2. sends it to encryption API (`/v1/encrypt`)
+3. returns API `result` (expected `happ://crypt...`)
 
 ## Output modes
 
 - `OUTPUT_MODE=raw` (default) — returns source exactly as-is.
 - `OUTPUT_MODE=base64` — returns base64 text of subscription.
-- `OUTPUT_MODE=fake_crypt5` — wraps as `happ://crypt5/<base64_payload>`.
+- `OUTPUT_MODE=fake_crypt5` — local wrapper `happ://crypt5/<base64_payload>` (not real encryption).
+- `OUTPUT_MODE=encrypt_api` — real encryption through API (`x-api-key` required).
 
-⚠️ `fake_crypt5` is only obfuscation, **not real happ crypt5 encryption/signature**. If your client validates real crypt5 format, it may reject this mode.
+## Required env vars by mode
 
-## Modes
+### A) Inline mode
 
-1. `SUBSCRIPTION_TEXT` — returns literal text as-is (or transformed by `OUTPUT_MODE`).
-2. `SUBSCRIPTION_URL` — fetches from upstream HTTP(S) and returns upstream payload/content-type (or transformed by `OUTPUT_MODE`).
+- `SUBSCRIPTION_TEXT=<your text>`
 
-If both are set, `SUBSCRIPTION_TEXT` is used.
+### B) Proxy mode
 
-## Anti-cold-start behavior (for mobile clients)
+- `SUBSCRIPTION_URL=<http/https source>`
 
-Proxy mode includes:
+### C) Real Happ encryption mode
+
+- `SUBSCRIPTION_URL` (or `SUBSCRIPTION_TEXT`)
+- `OUTPUT_MODE=encrypt_api`
+- `SAYORI_API_KEY=<key>`
+- optional `ENCRYPT_VERSION=crypt5` (`crypt`, `crypt2`, `crypt3`, `crypt4`, `crypt5`)
+- optional `ENCRYPT_ENDPOINT=https://api.sayori.cc/v1/encrypt`
+- optional `ENCRYPT_TIMEOUT_MS=8000`
+
+## Proxy reliability features
 
 - in-memory cache of last successful payload,
 - timeout + one retry for upstream fetch,
-- stale response fallback when upstream is slow/down,
-- optional static fallback text.
+- stale response fallback,
+- optional `FALLBACK_SUBSCRIPTION_TEXT`.
 
-## Environment variables
+## Keep function warm
 
-Required:
-
-- `SUBSCRIPTION_TEXT` **or** `SUBSCRIPTION_URL`
-
-Optional:
-
-- `OUTPUT_MODE` = `raw` | `base64` | `fake_crypt5` (default `raw`)
-- `FETCH_TIMEOUT_MS` (default `8000`)
-- `CACHE_TTL_MS` (default `300000`)
-- `FALLBACK_SUBSCRIPTION_TEXT` (returned if upstream fails and cache is empty)
-
-## Recommended setup for your case
-
-1. Put working source in `SUBSCRIPTION_URL` (the same raw GitHub link that already works).
-2. Start with `OUTPUT_MODE=raw` and verify import.
-3. If you only need “hidden text” try `OUTPUT_MODE=base64`.
-4. If you specifically need `happ://crypt5/...` shape, test `OUTPUT_MODE=fake_crypt5`.
-5. If client rejects fake mode, you need the **real crypt5 encoder from Happ**, not this function wrapper.
-
-## Keep function warm (important)
-
-Add a timer trigger in Yandex Cloud to call the function every 1–3 minutes to reduce cold-start issues on first mobile import.
+Add a timer trigger in Yandex Cloud to call function every 1–3 minutes to reduce first-request cold-start failures.

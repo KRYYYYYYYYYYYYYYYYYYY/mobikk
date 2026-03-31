@@ -1,0 +1,7 @@
+{
+  "name": "subscription-function",
+  "version": "1.0.0",
+  "description": "Yandex Cloud function that returns a happ subscription string",
+  "main": "index.js",
+  "type": "module"
+}

@@ -152,6 +152,28 @@ async function fetchUpstream(upstreamUrl, timeoutMs) {
   throw lastError ?? new Error("Upstream request failed");
 }
 
+
+function getQueryParam(event, key) {
+  return event?.queryStringParameters?.[key] ?? event?.queryString?.[key] ?? null;
+}
+
+function htmlDeeplinkPage(url) {
+  const safeUrl = String(url).replace(/"/g, "&quot;");
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Open Happ</title>
+</head>
+<body>
+  <p>Opening Happ...</p>
+  <p><a href="${safeUrl}">If not opened automatically, tap here</a></p>
+  <script>window.location.href = "${safeUrl}";</script>
+</body>
+</html>`;
+}
+
 async function formatSuccess(payload, contentType, extraHeaders = {}) {
   try {
     const transformed = await applyOutputMode(payload);
@@ -171,12 +193,28 @@ async function formatSuccess(payload, contentType, extraHeaders = {}) {
   }
 }
 
-export async function handler() {
+export async function handler(event = {}) {
   const inlineSubscription = process.env.SUBSCRIPTION_TEXT?.trim();
   const fallbackSubscription = process.env.FALLBACK_SUBSCRIPTION_TEXT?.trim();
   const upstreamUrl = process.env.SUBSCRIPTION_URL?.trim();
+  const happDeeplink = process.env.HAPP_DEEPLINK_URL?.trim();
+  const deeplinkMode = getQueryParam(event, "open");
 
   try {
+    if (happDeeplink && deeplinkMode === "redirect") {
+      return {
+        statusCode: 302,
+        headers: {
+          ...baseHeaders(DEFAULT_CONTENT_TYPE),
+          Location: happDeeplink
+        },
+        body: ""
+      };
+    }
+
+    if (happDeeplink && deeplinkMode === "page") {
+      return success(htmlDeeplinkPage(happDeeplink), "text/html; charset=utf-8");
+    }
     if (inlineSubscription) {
       return await formatSuccess(inlineSubscription, DEFAULT_CONTENT_TYPE);
     }

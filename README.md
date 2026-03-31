@@ -2,62 +2,61 @@
 
 Yandex Cloud Function (Node.js 22) for subscription delivery.
 
-## Important: why encrypted mode broke your client
+## Core limitation (important)
 
-If your source subscription has many servers (for example tens/hundreds of lines), converting the **whole list** into one `happ://crypt5/...` deeplink usually becomes too large and clients can fail with parse/database errors.
+You cannot reliably "fake browser fingerprint" for subscription import.
+When Happ updates subscription by URL, it usually performs backend HTTP fetch and expects subscription/config format directly.
+It does **not** execute browser JavaScript redirect flow the same way as manual tap/open in browser.
 
-For full subscription lists, use:
+So there are two separate flows:
 
-- `OUTPUT_MODE=raw` (recommended)
-- `SUBSCRIPTION_URL=<working raw txt url>`
+1. **Subscription URL update** → must return valid config list (`raw` mode recommended).
+2. **Manual browser open** → can redirect/open `happ://...` deeplink.
 
-This is the stable mode.
+## Stable mode for subscriptions (recommended)
 
-## Real encryption mode (`encrypt_api`)
+- `SUBSCRIPTION_URL=https://raw.githubusercontent.com/.../Goida.txt`
+- `OUTPUT_MODE=raw`
 
-Use only when payload is small enough for deeplink style usage.
+If this file already contains valid configs (vless/vmess/etc), this is the mode that should work for background updates.
 
-Required vars:
+## Deeplink mode for manual open
+
+Set:
+
+- `HAPP_DEEPLINK_URL=happ://crypt5/...`
+
+Then use function URL with query:
+
+- `?open=redirect` → HTTP 302 to `happ://...`
+- `?open=page` → HTML page that calls `window.location.href='happ://...'`
+
+This mode is for manual click/open and may not work for subscription parser update jobs.
+
+## Encryption mode (`encrypt_api`)
+
+Still available, but only for small payloads:
 
 - `OUTPUT_MODE=encrypt_api`
 - `SAYORI_API_KEY=<key>`
-- `SUBSCRIPTION_URL` or `SUBSCRIPTION_TEXT`
+- optional `MAX_ENCRYPT_INPUT_BYTES=4096`
 
-Optional vars:
+Large full subscriptions converted into one deeplink often break client parsing.
 
-- `ENCRYPT_VERSION=crypt5`
-- `ENCRYPT_ENDPOINT=https://api.sayori.cc/v1/encrypt`
-- `ENCRYPT_TIMEOUT_MS=8000`
-- `MAX_ENCRYPT_INPUT_BYTES=4096` (default guard)
-- `ALLOW_LARGE_ENCRYPT=true` (override guard, risky)
+## Other output modes
 
-If encryption fails, function now defaults to **fail-open** and returns raw payload with headers:
-
-- `X-Output-Mode-Fallback: raw`
-- `X-Output-Mode-Error: <reason>`
-
-Set `OUTPUT_FAIL_OPEN=false` if you want hard failure instead.
-
-## Output modes
-
-- `raw` (default) — return source as-is.
-- `base64` — return base64 text.
-- `fake_crypt5` — `happ://crypt5/<base64>` wrapper (not real crypt).
-- `encrypt_api` — real API encryption.
+- `raw` (default)
+- `base64`
+- `fake_crypt5` (wrapper, not real crypt)
+- `encrypt_api` (real API)
 
 ## Proxy reliability
 
-- in-memory cache of last successful payload,
-- timeout + one retry for upstream fetch,
-- stale response fallback,
+- in-memory cache,
+- timeout + retry,
+- stale fallback,
 - optional `FALLBACK_SUBSCRIPTION_TEXT`.
-
-## Minimal config that should work for your case
-
-- `SUBSCRIPTION_URL=https://raw.githubusercontent.com/.../wifi.txt`
-- `OUTPUT_MODE=raw`
-- do **not** set encryption vars
 
 ## Keep function warm
 
-Add a timer trigger every 1–3 minutes to reduce first-request cold starts.
+Add timer trigger every 1–3 minutes to reduce first-request cold starts.

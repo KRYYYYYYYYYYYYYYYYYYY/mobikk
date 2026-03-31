@@ -2,6 +2,7 @@ const DEFAULT_CONTENT_TYPE = "text/plain; charset=utf-8";
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_ENCRYPT_ENDPOINT = "https://api.sayori.cc/v1/encrypt";
+const DEFAULT_MAX_ENCRYPT_INPUT_BYTES = 4096;
 
 const cache = {
   body: null,
@@ -37,6 +38,11 @@ function toBase64(input) {
   return Buffer.from(input, "utf-8").toString("base64");
 }
 
+
+function byteLengthUtf8(input) {
+  return Buffer.byteLength(input, "utf-8");
+}
+
 async function encryptWithSayori(payload) {
   const apiKey = process.env.SAYORI_API_KEY?.trim();
 
@@ -47,6 +53,13 @@ async function encryptWithSayori(payload) {
   const endpoint = process.env.ENCRYPT_ENDPOINT?.trim() || DEFAULT_ENCRYPT_ENDPOINT;
   const version = process.env.ENCRYPT_VERSION?.trim() || "crypt5";
   const timeoutMs = toNumber(process.env.ENCRYPT_TIMEOUT_MS, DEFAULT_TIMEOUT_MS);
+  const maxInputBytes = toNumber(process.env.MAX_ENCRYPT_INPUT_BYTES, DEFAULT_MAX_ENCRYPT_INPUT_BYTES);
+  const allowLargeEncrypt = (process.env.ALLOW_LARGE_ENCRYPT ?? "false").trim().toLowerCase() === "true";
+  const payloadBytes = byteLengthUtf8(payload);
+
+  if (!allowLargeEncrypt && payloadBytes > maxInputBytes) {
+    throw new Error(`Encryption input too large (${payloadBytes} bytes). Use OUTPUT_MODE=raw for full subscriptions.`);
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -140,8 +153,22 @@ async function fetchUpstream(upstreamUrl, timeoutMs) {
 }
 
 async function formatSuccess(payload, contentType, extraHeaders = {}) {
-  const transformed = await applyOutputMode(payload);
-  return success(transformed, contentType, extraHeaders);
+  try {
+    const transformed = await applyOutputMode(payload);
+    return success(transformed, contentType, extraHeaders);
+  } catch (error) {
+    const failOpen = (process.env.OUTPUT_FAIL_OPEN ?? "true").trim().toLowerCase() === "true";
+
+    if (failOpen) {
+      return success(payload, contentType, {
+        ...extraHeaders,
+        "X-Output-Mode-Fallback": "raw",
+        "X-Output-Mode-Error": error.message
+      });
+    }
+
+    throw error;
+  }
 }
 
 export async function handler() {
@@ -202,7 +229,7 @@ export async function handler() {
     return {
       statusCode: 500,
       headers: baseHeaders(),
-      body: `Output transform failed: ${error.message}`
+      body: `Output transform failed: ${error.message}. Tip: use OUTPUT_MODE=raw for full subscription lists.`
     };
   }
 }
